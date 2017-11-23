@@ -49,6 +49,7 @@ typedef struct {
 #define CHUNK_SIZE (1 << 14)
 #define CHUNK_ALIGN(size) (((size)+(CHUNK_SIZE-1)) & ~(CHUNK_SIZE-1))
 #define CHUNK_OVERHEAD (sizeof(block_header) * 3)
+#define BLK_HDR_SZ (sizeof(block_header))
 //PUT(p, PACK(48, 1));
 
 void *current_avail = NULL;
@@ -69,11 +70,16 @@ int mm_init(void)
   block_header* chunk_prolog_hdr = mem_map(chunk_bytes);
   if(chunk_prolog_hdr == NULL)
     return -1;
+
+  // Check results of mem_map
   if(mem_is_mapped((void*)chunk_prolog_hdr,chunk_bytes) == 0)
     if(debug_on) {printf("Failed to init enough bytes\n"); scanf("%c",&in);}
-  //arb
-  //Place chunk header and prolog block, pack size and alloc, embed data specific to each block
+  if( mem_is_mapped((void*)chunk_prolog_hdr, chunk_bytes + 1) != 1)
+    if(debug_on) {printf("mem_map mapped too many bytes\n"); scanf("%c",&in);}
 
+
+  //Place chunk header and prolog block, pack size and alloc, embed data specific to each blockgit
+  PUT((void*)chunk_prolog_hdr, PACK(2*BLK_HDR_SZ, 1));
 
   
   return 0;
