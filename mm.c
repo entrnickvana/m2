@@ -57,6 +57,8 @@ typedef struct {
 static void* extend(size_t new_size);
 static int set_allocated(void *bp, size_t size);
 static void* set_new_chunk(size_t new_size);
+static unsigned long calc_offset(void* new_ptr);
+static void print_block_info(void* bp);
 
 //PUT(p, PACK(48, 1));
 
@@ -73,6 +75,10 @@ static void* set_new_chunk(size_t new_size);
 void *current_avail = NULL;
 void* first_bp = NULL;
 int current_avail_size = 0;
+int current_alloc_capacity = 0;
+int current_unalloc_capacity = 0;
+int current_payload_capacity = 0;
+int total_chunk_capacity = 0;
 int debug_on = 1;
 int extend_amt = 8;
 char in = 0;
@@ -82,53 +88,31 @@ char in = 0;
  */
 int mm_init(void)
 {
+  // check heap, remove all allocations
+
+
   current_avail = NULL;
   current_avail_size = 0;
   // GET aligned initial size 
-  size_t num_pages = 4;
+  size_t num_pages = 16;
   size_t chunk_bytes = CHUNK_ALIGN(mem_pagesize()*num_pages);
-  block_header* chunk_prolog_hdr = mem_map(chunk_bytes);
-  if(chunk_prolog_hdr == NULL)
+
+  first_bp = set_new_chunk(chunk_bytes);
+  if(first_bp == NULL || ((size_t)first_bp) % 16 != 0){ // NOT ALIGNED
+    if(debug_on) {printf("SET NEW CHUNK\n"); scanf("%c",&in);}
     return -1;
+  }
 
-  // Check results of mem_map
-  if(mem_is_mapped((void*)chunk_prolog_hdr,chunk_bytes) == 0)
-    if(debug_on) {printf("Failed to init enough bytes\n"); scanf("%c",&in);}
-  if( mem_is_mapped((void*)chunk_prolog_hdr, chunk_bytes + 1) != 1)
-    if(debug_on) {printf("mem_map mapped too many bytes\n"); scanf("%c",&in);}
-
-
-  //Place chunk header and prolog block, pack size and alloc, embed data specific to each blockgit
-  PUT((void*)chunk_prolog_hdr, PACK(2*BLK_HDR_SZ, 1));
-  GET_DATA(chunk_prolog_hdr) = chunk_bytes;             // REPRESENTS SIZE OF CHUNK
-
-  //Place end of chunk ftr
-  block_header* end_of_chunk_ftr = ((void*)chunk_prolog_hdr + chunk_bytes - sizeof(block_header));
-  PUT((void*)end_of_chunk_ftr, PACK(0, 1));
-  GET_DATA(end_of_chunk_ftr) = 0;
-
-  //Place prolog ftr, pack size and alloc
-  block_header* prolog_ftr = ((void*)chunk_prolog_hdr + sizeof(block_header));
-  PUT((void*)prolog_ftr, PACK(2*BLK_HDR_SZ, 1));
-  GET_DATA(end_of_chunk_ftr) = 0;
-
-  //Place first block header
-  block_header* first_block = ((void*)chunk_prolog_hdr + (sizeof(block_header)*2));
-  size_t size_first_block = chunk_bytes - CHUNK_OVERHEAD; 
-  PUT((void*)first_block, PACK(size_first_block, 0));
-
-  // Place first bp
-  char* first_bp = HDRP(first_block);
-
-  // Place first block footer
-  block_header* first_block_footer = (block_header*)FTRP(first_bp);
-  PUT((void*)first_block_footer, PACK(size_first_block, 0));
-
-  current_avail = first_bp; 
-  current_avail_size = size_first_block - OVERHEAD;
   return 0;
 }
 
+
+// chunk_capacity = sum all chunk sizes
+// unalloc capacity = sum all unalloc blocks
+// alloc capacity = sum all alloc blocks
+
+// byte check = (sum all chunks - num_chunks*chunk_overhead) == (unalloc capacity + alloc capacity)
+// 
 
 static void* set_new_chunk(size_t new_size){
 
@@ -157,7 +141,7 @@ static void* set_new_chunk(size_t new_size){
   //Place prolog ftr, pack size and alloc
   block_header* prolog_ftr = ((void*)chunk_prolog_hdr + sizeof(block_header));
   PUT((void*)prolog_ftr, PACK(2*BLK_HDR_SZ, 1));
-  GET_DATA(end_of_chunk_ftr) = 0;
+  GET_DATA(end_of_chunk_ftr) = (size_t)first_bp;
 
   //Place first block header
   block_header* first_block = ((void*)chunk_prolog_hdr + (sizeof(block_header)*2));
@@ -182,22 +166,41 @@ static void* set_new_chunk(size_t new_size){
 void *mm_malloc(size_t size) {
  int new_size = ALIGN(size + OVERHEAD);
  void *bp = first_bp;
+ //void *first_chunk_bp = first_bp;
 
- while (GET_SIZE(HDRP(bp)) != 0) {  // WHILE HAVE NOT REACHED END OF CHUNK
-    if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size)) {  // IF UNALLOC AND SIZE IS LARGE ENOUGH
-      set_allocated(bp, new_size);  // SET AS ALLOCATED AND RETURN bp
-      return bp;
-    }
-    bp = NEXT_BLKP(bp);
- }
- 
- if(extend(new_size) == NULL)
+ do{
+      while (GET_SIZE(HDRP(bp)) != 0) {  // WHILE HAVE NOT REACHED END OF CHUNK
+         if (!GET_ALLOC(HDRP(bp)) && (GET_SIZE(HDRP(bp)) >= new_size)) {  // IF UNALLOC AND SIZE IS LARGE ENOUGH
+           set_allocated(bp, new_size);  // SET AS ALLOCATED AND RETURN bp
+           return bp;
+         }
+         bp = NEXT_BLKP(bp);
+      }
+
+
+      void* next_chunk_bp = (void*)GET_DATA(HDRP(bp));
+      if( next_chunk_bp != first_bp && GET_ALLOC(HDRP(bp)) != 1){ // ISN'T LAST CHUNK BUT ISN'T ALLOCATED -> ERROR!
+        if(debug_on) {printf("mm_malloc did not reach end of chunk before extending\n"); scanf("%c",&in);} 
+        return NULL;
+      }else if((void*)GET_DATA(HDRP(bp)) != first_bp && GET_ALLOC(HDRP(bp)) == 1){ // ISN'T LAST CHUNK AND IS ALLOCATED
+        size_t next_chunk_size = GET_SIZE((void*)HDRP(bp) - CHUNK_OVERHEAD);
+        if( next_chunk_size == 2*BLK_HDR_SZ && mem_is_mapped((void*)GET_DATA(HDRP(bp)), next_chunk_size) == 1) // PTR POINTS TO MAPPED CHUNK
+          bp = next_chunk_bp;
+      } // REACHED END OF ALL CHUNKS
+
+    }while((void*)GET_DATA(HDRP(bp)) != first_bp);
+
+
+ void* new_bp = extend(new_size);
+ if(new_bp == NULL)
   return NULL;
-
- if(set_allocated(bp, new_size))
+  
+ GET_DATA(HDRP(bp)) = (size_t)new_bp;
+  
+ if(set_allocated(new_bp, new_size))
   if(debug_on) {printf("Failed to set new chunk\n"); scanf("%c",&in);}
-
- return bp;
+ 
+ return new_bp;
 
 }
 
@@ -240,6 +243,9 @@ void mm_free(void *ptr)
 {
   if(ptr == NULL)
   {  if(debug_on) {printf("mnm_free was passed null ptr\n"); scanf("%c",&in);}   return;    }
+
+  size_t block_size = GET_SIZE(HDRP(ptr));
+  if(mem_is_mapped(ptr, block_size) == 0) if(debug_on) {printf("mm_free detected attempted free of UNMAPPED MEM\n"); scanf("%c",&in);} return;
     
 }
 
@@ -270,6 +276,37 @@ int mm_can_free(void *p)
   if(mem_is_mapped(p, block_size) == 0) if(debug_on) {printf("mm_can detected attempted free of UNMAPPED MEM\n"); scanf("%c",&in);} return 0;
 
   return 1;
+}
 
+static void print_block_info(void* bp)
+{
+  if(!debug_on)
+  return;
+  
+  //printf("////////////////////////////////////////////////////////////////////////////////\n\n");
 
+  int i = 1;
+  char in;
+do{
+    while (GET_SIZE(HDRP(bp)) != 0) {  // WHILE HAVE NOT REACHED END OF CHUNK
+        printf("BLOCK HDR:\t ptr:%p\t\t\toff: %zu\t\t\t\tsize: %zu\t\t\talloc: %zu\t\t\tNUMBER IN CHUNK: %d\n", HDRP(bp), calc_offset(HDRP(bp)),GET_SIZE(HDRP(bp)), GET_ALLOC(HDRP(bp)), i);
+        block_header* ftr = (block_header*)FTRP(bp);
+  
+        printf("BLOCK FTR:\t ptr:%p\t\t\toff: %zu\t\t\tsize: %zu\t\t\talloc: %zu\t\t\tNUMBER IN CHUNK: %d\n", ftr, calc_offset(ftr),GET_SIZE(ftr), GET_ALLOC(ftr), i++);
+  
+        printf("DIST IN BYTES HDR -> FTR: %zu\n\n\n", calc_offset(ftr) - calc_offset(HDRP(bp)) );
+  
+          bp = NEXT_BLKP(bp);
+    }
+    
+    scanf("%c",&in);
+    if(in == 'x')
+      return;
+    bp = (void*)GET_DATA(HDRP(bp));
+  }while(bp != first_bp);
+
+}
+
+static size_t calc_offset(void* new_ptr){
+  return (void*)new_ptr - ((void*)first_bp - CHUNK_OVERHEAD);
 }
