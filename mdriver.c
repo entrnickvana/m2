@@ -635,7 +635,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges, int che
 		malloc_error(tracenum, i, "mm_malloc failed.");
 		return 0;
 	    }
-            if (checks && !check(chaos, "alloc"))
+            if (checks && !check(chaos, "malloc"))
               return 0;
 	    
 	    /* 
@@ -651,8 +651,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges, int che
 	     * if we realloc the block and wish to make sure that the old
 	     * data was copied to the new block
 	     */
-            if (!chaos)
-              memset(p, index & 0xFF, size);
+	    memset(p, index & 0xFF, size);
 
 	    /* Remember region */
 	    trace->blocks[index] = p;
@@ -667,7 +666,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges, int che
 		malloc_error(tracenum, i, "mm_malloc failed.");
 		return 0;
 	    }
-            if (checks && !check(chaos, "alloc"))
+            if (checks && !check(chaos, "malloc"))
               return 0;
 
 	    /* Remove the old region from the range list */
@@ -676,8 +675,7 @@ static int eval_mm_valid(trace_t *trace, int tracenum, range_t **ranges, int che
 	    /* Check new block for correctness and add it to range list */
 	    if (add_range(ranges, newp, size, tracenum, i) == 0)
 		return 0;
-            if (!chaos)
-              memset(newp, index & 0xFF, size);
+	    memset(newp, index & 0xFF, size);
 
             if (checks && !check_free(chaos, oldp))
               return 0;
